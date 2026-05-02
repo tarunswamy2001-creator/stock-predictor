@@ -3,371 +3,190 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-# ── Page config ──────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Intra-Day Stock Predictor",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Stock Predictor", page_icon="📈", layout="wide")
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #185FA5;
-        margin-bottom: 0;
-    }
-    .sub-header {
-        font-size: 1rem;
-        color: #666;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 1rem 1.2rem;
-        border-left: 4px solid #185FA5;
-    }
-    .author-tag {
-        font-size: 0.85rem;
-        color: #888;
-        margin-top: 0.3rem;
-    }
-    .predict-box {
-        background: linear-gradient(135deg, #E6F1FB, #f0f7ff);
-        border-radius: 12px;
-        padding: 1.5rem;
-        border: 1px solid #c8dff5;
-        text-align: center;
-    }
-    .signal-up { color: #1D9E75; font-size: 2rem; font-weight: 700; }
-    .signal-down { color: #D85A30; font-size: 2rem; font-weight: 700; }
-    .signal-hold { color: #EF9F27; font-size: 2rem; font-weight: 700; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown('<p class="main-header">📈 Intra-Day Stock Price Predictor</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Random Forest ML model · Indian & Global Stocks · Built by D. Tarun Swamy</p>', unsafe_allow_html=True)
+st.title("📈 Intra-Day Stock Price Predictor")
+st.caption("Random Forest ML Model · Indian Stocks (NSE) · Built by D. Tarun Swamy, MCA - Vignan University")
 st.markdown("---")
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# Sidebar
 with st.sidebar:
-    st.markdown("### ⚙️ Settings")
-
-    # Popular Indian stocks
-    popular_stocks = {
-        "Reliance Industries": "RELIANCE.NS",
-        "TCS": "TCS.NS",
+    st.header("⚙️ Settings")
+    stocks = {
         "Infosys": "INFY.NS",
+        "TCS": "TCS.NS",
+        "Reliance": "RELIANCE.NS",
         "HDFC Bank": "HDFCBANK.NS",
-        "ICICI Bank": "ICICIBANK.NS",
         "Wipro": "WIPRO.NS",
-        "HCL Technologies": "HCLTECH.NS",
-        "Bajaj Finance": "BAJFINANCE.NS",
-        "Maruti Suzuki": "MARUTI.NS",
+        "ICICI Bank": "ICICIBANK.NS",
         "SBI": "SBIN.NS",
+        "HCL Tech": "HCLTECH.NS",
+        "Bajaj Finance": "BAJFINANCE.NS",
         "Asian Paints": "ASIANPAINT.NS",
-        "Titan Company": "TITAN.NS",
     }
-
-    stock_choice = st.selectbox(
-        "Select Indian Stock",
-        options=list(popular_stocks.keys()),
-        index=2
-    )
-    ticker_symbol = popular_stocks[stock_choice]
-
-    custom_ticker = st.text_input("Or enter custom ticker (e.g. TATAMOTORS.NS)", "")
-    if custom_ticker.strip():
-        ticker_symbol = custom_ticker.strip().upper()
-
-    period = st.selectbox(
-        "Training data period",
-        ["3mo", "6mo", "1y", "2y"],
-        index=2,
-        help="More data = better model accuracy"
-    )
-
-    n_estimators = st.slider("Random Forest trees", 50, 300, 100, 50)
-    prediction_days = st.slider("Days to show in chart", 30, 120, 60)
-
+    stock_name = st.selectbox("Select Stock", list(stocks.keys()))
+    ticker = stocks[stock_name]
+    custom = st.text_input("Or enter custom (e.g. TATAMOTORS.NS)")
+    if custom:
+        ticker = custom.upper()
+    period = st.selectbox("Data period", ["6mo", "1y", "2y"], index=1)
+    n_trees = st.slider("Number of trees", 50, 200, 100, 50)
     st.markdown("---")
-    st.markdown("**About this project**")
-    st.markdown("""
-    This app was built as part of my MCA final project on **Intra-Day Stock Price Prediction using Machine Learning**.
+    st.markdown("**MCA Final Project**")
+    st.markdown("Intra-Day Stock Prediction using Random Forest ML")
+    st.markdown("*D. Tarun Swamy, Vignan University*")
 
-    **Model:** Random Forest Classifier  
-    **Features:** RSI, MACD, Bollinger Bands, Moving Averages, Volume  
-    **Target:** Next-day price direction (UP / DOWN)
-
-    — D. Tarun Swamy, MCA  
-    Vignan University, Guntur
-    """)
-
-# ── Feature Engineering ───────────────────────────────────────────────────────
-def compute_features(df):
-    df = df.copy()
-
-    # Moving Averages
-    df['MA_5']  = df['Close'].rolling(5).mean()
-    df['MA_10'] = df['Close'].rolling(10).mean()
-    df['MA_20'] = df['Close'].rolling(20).mean()
-    df['MA_50'] = df['Close'].rolling(50).mean()
-
-    # EMA
-    df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
-    df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
-
-    # MACD
-    df['MACD'] = df['EMA_12'] - df['EMA_26']
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-
-    # RSI
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / (loss + 1e-10)
-    df['RSI'] = 100 - (100 / (1 + rs))
-
-    # Bollinger Bands
-    bb_mid = df['Close'].rolling(20).mean()
-    bb_std = df['Close'].rolling(20).std()
-    df['BB_upper'] = bb_mid + 2 * bb_std
-    df['BB_lower'] = bb_mid - 2 * bb_std
-    df['BB_width'] = (df['BB_upper'] - df['BB_lower']) / (bb_mid + 1e-10)
-    df['BB_pos']   = (df['Close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'] + 1e-10)
-
-    # Price features
-    df['Daily_Return'] = df['Close'].pct_change()
-    df['High_Low_Pct'] = (df['High'] - df['Low']) / (df['Close'] + 1e-10)
-    df['Open_Close_Pct'] = (df['Close'] - df['Open']) / (df['Open'] + 1e-10)
-
-    # Volume
-    df['Volume_MA'] = df['Volume'].rolling(10).mean()
-    df['Volume_Ratio'] = df['Volume'] / (df['Volume_MA'] + 1e-10)
-
-    # MA crossovers
-    df['MA5_MA20_cross'] = df['MA_5'] - df['MA_20']
-    df['MA10_MA50_cross'] = df['MA_10'] - df['MA_50']
-
-    # Target: 1 = price goes UP next day, 0 = goes DOWN
-    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-
-    return df
-
-# ── Load & Train ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def load_and_train(ticker, period, n_estimators):
+def get_data_and_predict(ticker, period, n_trees):
     df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
     if df.empty or len(df) < 60:
-        return None, None, None, None, None, None
+        return None
 
-    # Flatten multi-level columns if present
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df = compute_features(df)
+    df['MA5']  = df['Close'].rolling(5).mean()
+    df['MA20'] = df['Close'].rolling(20).mean()
+    df['MA50'] = df['Close'].rolling(50).mean()
+
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    df['RSI'] = 100 - (100 / (1 + gain / (loss + 1e-9)))
+
+    ema12 = df['Close'].ewm(span=12).mean()
+    ema26 = df['Close'].ewm(span=26).mean()
+    df['MACD'] = ema12 - ema26
+
+    bb_mid = df['Close'].rolling(20).mean()
+    bb_std = df['Close'].rolling(20).std()
+    df['BB_pos'] = (df['Close'] - (bb_mid - 2*bb_std)) / (4*bb_std + 1e-9)
+
+    df['Return']   = df['Close'].pct_change()
+    df['HL_range'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
+    df['Vol_ratio'] = df['Volume'] / (df['Volume'].rolling(10).mean() + 1e-9)
+
+    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
     df.dropna(inplace=True)
 
-    feature_cols = [
-        'MA_5','MA_10','MA_20','MA_50',
-        'EMA_12','EMA_26',
-        'MACD','MACD_Signal','MACD_Hist',
-        'RSI',
-        'BB_width','BB_pos',
-        'Daily_Return','High_Low_Pct','Open_Close_Pct',
-        'Volume_Ratio',
-        'MA5_MA20_cross','MA10_MA50_cross'
-    ]
-
-    X = df[feature_cols].values
+    features = ['MA5','MA20','MA50','RSI','MACD','BB_pos','Return','HL_range','Vol_ratio']
+    X = df[features].values
     y = df['Target'].values
 
-    # Train/test split (80/20, time-based)
     split = int(len(X) * 0.8)
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
-
     scaler = StandardScaler()
-    X_train_s = scaler.fit_transform(X_train)
-    X_test_s  = scaler.transform(X_test)
+    X_train = scaler.fit_transform(X[:split])
+    X_test  = scaler.transform(X[split:])
 
-    model = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=8,
-        min_samples_split=5,
-        random_state=42,
-        class_weight='balanced'
-    )
-    model.fit(X_train_s, y_train)
+    model = RandomForestClassifier(n_estimators=n_trees, max_depth=6, random_state=42, class_weight='balanced')
+    model.fit(X_train, y[:split])
 
-    y_pred = model.predict(X_test_s)
-    acc = accuracy_score(y_test, y_pred)
+    acc = accuracy_score(y[split:], model.predict(X_test))
+    next_pred = model.predict(scaler.transform(X[-1:]))[0]
+    next_prob = model.predict_proba(scaler.transform(X[-1:]))[0]
 
-    # Next-day prediction
-    latest = scaler.transform(X[-1].reshape(1, -1))
-    next_pred = model.predict(latest)[0]
-    next_prob = model.predict_proba(latest)[0]
+    fi = pd.DataFrame({'Feature': features, 'Importance': model.feature_importances_}).sort_values('Importance', ascending=False)
 
-    feature_importance = pd.DataFrame({
-        'Feature': feature_cols,
-        'Importance': model.feature_importances_
-    }).sort_values('Importance', ascending=False)
+    return {'df': df, 'acc': acc, 'pred': next_pred, 'prob': next_prob, 'fi': fi}
 
-    return df, model, acc, next_pred, next_prob, feature_importance
+with st.spinner(f"Loading {stock_name} data and training model..."):
+    result = get_data_and_predict(ticker, period, n_trees)
 
-# ── Main UI ───────────────────────────────────────────────────────────────────
-with st.spinner(f"Fetching data & training model for {ticker_symbol}..."):
-    result = load_and_train(ticker_symbol, period, n_estimators)
-
-if result[0] is None:
-    st.error(f"Could not fetch data for **{ticker_symbol}**. Please check the ticker symbol and try again.")
+if result is None:
+    st.error("Could not fetch data. Check the ticker and try again.")
     st.stop()
 
-df, model, acc, next_pred, next_prob, feat_imp = result
+df   = result['df']
+acc  = result['acc']
+pred = result['pred']
+prob = result['prob']
+fi   = result['fi']
 
-# ── Top metrics ───────────────────────────────────────────────────────────────
-col1, col2, col3, col4, col5 = st.columns(5)
+price   = float(df['Close'].iloc[-1])
+prev    = float(df['Close'].iloc[-2])
+change  = ((price - prev) / prev) * 100
 
-current_price = float(df['Close'].iloc[-1])
-prev_price    = float(df['Close'].iloc[-2])
-price_change  = current_price - prev_price
-price_pct     = (price_change / prev_price) * 100
-
-col1.metric("Current Price", f"₹{current_price:,.2f}", f"{price_pct:+.2f}%")
-col2.metric("Model Accuracy", f"{acc*100:.1f}%", "on test data")
-col3.metric("RSI", f"{float(df['RSI'].iloc[-1]):.1f}", "14-day")
-col4.metric("Training Samples", f"{int(len(df)*0.8)}", f"of {len(df)} days")
-col5.metric("Features Used", "18", "engineered indicators")
+# Metrics row
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Current Price", f"₹{price:,.2f}", f"{change:+.2f}%")
+c2.metric("Model Accuracy", f"{acc*100:.1f}%", "on test set")
+c3.metric("RSI", f"{float(df['RSI'].iloc[-1]):.1f}")
+c4.metric("Data Points", str(len(df)))
 
 st.markdown("---")
 
-# ── Prediction Banner ─────────────────────────────────────────────────────────
-pred_col, chart_col = st.columns([1, 2])
+# Prediction + Chart
+col1, col2 = st.columns([1, 2])
 
-with pred_col:
-    st.markdown("### 🔮 Tomorrow's Prediction")
-    signal = "📈 BUY / UP" if next_pred == 1 else "📉 SELL / DOWN"
-    signal_class = "signal-up" if next_pred == 1 else "signal-down"
-    confidence = next_prob[next_pred] * 100
+with col1:
+    st.subheader("🔮 Tomorrow's Prediction")
+    if pred == 1:
+        st.success(f"### 📈 BUY / UP")
+    else:
+        st.error(f"### 📉 SELL / DOWN")
 
-    st.markdown(f"""
-    <div class="predict-box">
-        <div class="{signal_class}">{signal}</div>
-        <p style="font-size:1.1rem;margin-top:.5rem;color:#444">Confidence: <b>{confidence:.1f}%</b></p>
-        <p style="font-size:.85rem;color:#888;margin-top:.3rem">P(UP) = {next_prob[1]*100:.1f}% &nbsp;|&nbsp; P(DOWN) = {next_prob[0]*100:.1f}%</p>
-        <hr style="margin:.8rem 0;opacity:.3">
-        <p style="font-size:.8rem;color:#aaa">⚠️ For educational purposes only.<br>Not financial advice.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.metric("Confidence", f"{prob[pred]*100:.1f}%")
+    st.write(f"P(UP) = **{prob[1]*100:.1f}%** | P(DOWN) = **{prob[0]*100:.1f}%**")
+    st.caption("⚠️ Educational purposes only. Not financial advice.")
 
-    # Current indicators
-    st.markdown("### 📊 Current Indicators")
-    rsi_val  = float(df['RSI'].iloc[-1])
-    macd_val = float(df['MACD'].iloc[-1])
-    bb_pos   = float(df['BB_pos'].iloc[-1])
+    st.markdown("---")
+    st.subheader("📊 Indicators")
+    rsi = float(df['RSI'].iloc[-1])
+    macd = float(df['MACD'].iloc[-1])
+    bb = float(df['BB_pos'].iloc[-1])
+    st.write(f"**RSI ({rsi:.1f}):** {'🔴 Overbought' if rsi>70 else ('🟢 Oversold' if rsi<30 else '🟡 Neutral')}")
+    st.write(f"**MACD ({macd:.2f}):** {'🟢 Bullish' if macd>0 else '🔴 Bearish'}")
+    st.write(f"**Bollinger:** {'🔴 Near Upper' if bb>0.8 else ('🟢 Near Lower' if bb<0.2 else '🟡 Middle')}")
 
-    rsi_status  = "Overbought 🔴" if rsi_val > 70 else ("Oversold 🟢" if rsi_val < 30 else "Neutral 🟡")
-    macd_status = "Bullish 🟢" if macd_val > 0 else "Bearish 🔴"
-    bb_status   = "Near Upper 🔴" if bb_pos > 0.8 else ("Near Lower 🟢" if bb_pos < 0.2 else "Middle 🟡")
-
-    st.markdown(f"**RSI ({rsi_val:.1f}):** {rsi_status}")
-    st.markdown(f"**MACD ({macd_val:.3f}):** {macd_status}")
-    st.markdown(f"**Bollinger Position:** {bb_status}")
-
-with chart_col:
-    st.markdown("### 📉 Price Chart with Signals")
-    recent = df.tail(prediction_days).copy()
-
+with col2:
+    st.subheader("📉 Price Chart")
+    recent = df.tail(60)
     fig = go.Figure()
-
-    # Candlestick
     fig.add_trace(go.Candlestick(
         x=recent.index,
         open=recent['Open'], high=recent['High'],
         low=recent['Low'],   close=recent['Close'],
-        name='OHLC',
-        increasing_line_color='#1D9E75',
-        decreasing_line_color='#D85A30'
+        name='Price',
+        increasing_line_color='#00b09b',
+        decreasing_line_color='#ff4b4b'
     ))
-
-    # MAs
-    fig.add_trace(go.Scatter(x=recent.index, y=recent['MA_20'],
-        line=dict(color='#185FA5', width=1.5), name='MA 20'))
-    fig.add_trace(go.Scatter(x=recent.index, y=recent['MA_50'],
-        line=dict(color='#EF9F27', width=1.5), name='MA 50'))
-
-    # Bollinger Bands
-    fig.add_trace(go.Scatter(x=recent.index, y=recent['BB_upper'],
-        line=dict(color='rgba(150,150,150,0.4)', width=1, dash='dot'), name='BB Upper'))
-    fig.add_trace(go.Scatter(x=recent.index, y=recent['BB_lower'],
-        line=dict(color='rgba(150,150,150,0.4)', width=1, dash='dot'),
-        fill='tonexty', fillcolor='rgba(180,180,180,0.07)', name='BB Lower'))
-
-    fig.update_layout(
-        height=380, xaxis_rangeslider_visible=False,
-        plot_bgcolor='white', paper_bgcolor='white',
-        legend=dict(orientation='h', y=1.08),
-        margin=dict(l=10, r=10, t=30, b=10),
-        font=dict(family="Arial")
-    )
-    fig.update_xaxes(showgrid=True, gridcolor='#f0f0f0')
-    fig.update_yaxes(showgrid=True, gridcolor='#f0f0f0', title="Price (₹)")
-
+    fig.add_trace(go.Scatter(x=recent.index, y=recent['MA20'], line=dict(color='#185FA5', width=1.5), name='MA20'))
+    fig.add_trace(go.Scatter(x=recent.index, y=recent['MA50'], line=dict(color='#EF9F27', width=1.5), name='MA50'))
+    fig.update_layout(height=400, xaxis_rangeslider_visible=False, plot_bgcolor='white', paper_bgcolor='white')
     st.plotly_chart(fig, use_container_width=True)
 
-# ── Feature Importance + RSI ──────────────────────────────────────────────────
 st.markdown("---")
-fi_col, rsi_col = st.columns(2)
 
-with fi_col:
-    st.markdown("### 🧠 Feature Importance (Top 10)")
-    top10 = feat_imp.head(10)
-    fig2 = px.bar(top10, x='Importance', y='Feature', orientation='h',
-                  color='Importance', color_continuous_scale='Blues')
-    fig2.update_layout(height=320, margin=dict(l=10,r=10,t=10,b=10),
-                       plot_bgcolor='white', paper_bgcolor='white',
-                       coloraxis_showscale=False, yaxis=dict(autorange='reversed'))
-    fig2.update_xaxes(showgrid=True, gridcolor='#f0f0f0')
+# Feature importance
+col3, col4 = st.columns(2)
+
+with col3:
+    st.subheader("🧠 Feature Importance")
+    fig2 = go.Figure(go.Bar(
+        x=fi['Importance'], y=fi['Feature'],
+        orientation='h', marker_color='#185FA5'
+    ))
+    fig2.update_layout(height=300, plot_bgcolor='white', paper_bgcolor='white', yaxis=dict(autorange='reversed'))
     st.plotly_chart(fig2, use_container_width=True)
 
-with rsi_col:
-    st.markdown("### 📈 RSI (Last 60 Days)")
-    rsi_data = df['RSI'].tail(60)
+with col4:
+    st.subheader("📈 RSI (Last 60 Days)")
+    rsi_series = df['RSI'].tail(60)
     fig3 = go.Figure()
-    fig3.add_trace(go.Scatter(x=rsi_data.index, y=rsi_data.values,
-        fill='tozeroy', line=dict(color='#185FA5', width=2), name='RSI'))
-    fig3.add_hline(y=70, line=dict(color='#D85A30', dash='dash', width=1.5), annotation_text='Overbought 70')
-    fig3.add_hline(y=30, line=dict(color='#1D9E75', dash='dash', width=1.5), annotation_text='Oversold 30')
-    fig3.update_layout(height=320, margin=dict(l=10,r=10,t=10,b=10),
-                       plot_bgcolor='white', paper_bgcolor='white',
-                       yaxis=dict(range=[0,100], title='RSI'))
-    fig3.update_xaxes(showgrid=True, gridcolor='#f0f0f0')
+    fig3.add_trace(go.Scatter(x=rsi_series.index, y=rsi_series.values, fill='tozeroy', line=dict(color='#185FA5')))
+    fig3.add_hline(y=70, line=dict(color='red',  dash='dash'))
+    fig3.add_hline(y=30, line=dict(color='green', dash='dash'))
+    fig3.update_layout(height=300, plot_bgcolor='white', paper_bgcolor='white', yaxis=dict(range=[0,100]))
     st.plotly_chart(fig3, use_container_width=True)
 
-# ── Raw Data ──────────────────────────────────────────────────────────────────
-with st.expander("📋 View Raw Data (last 30 days)"):
-    display_cols = ['Open','High','Low','Close','Volume','RSI','MACD','MA_20','MA_50','BB_pos']
-    st.dataframe(
-        df[display_cols].tail(30).round(3).iloc[::-1],
-        use_container_width=True
-    )
+with st.expander("📋 Raw Data (last 20 days)"):
+    st.dataframe(df[['Open','High','Low','Close','Volume','RSI','MACD','MA20']].tail(20).round(2).iloc[::-1], use_container_width=True)
 
 st.markdown("---")
-st.markdown(
-    "<p style='text-align:center;color:#aaa;font-size:.8rem;'>Built by D. Tarun Swamy · MCA, Vignan University · Intra-Day Stock Prediction using Random Forest ML</p>",
-    unsafe_allow_html=True
-)
+st.caption("Built by D. Tarun Swamy · MCA, Vignan University, Guntur · Intra-Day Stock Prediction using Random Forest")
