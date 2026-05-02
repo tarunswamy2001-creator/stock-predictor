@@ -324,8 +324,8 @@ with chart_col:
         margin=dict(l=10, r=10, t=30, b=10),
         font=dict(family="Arial")
     )
-    fig.update_xaxis(showgrid=True, gridcolor='#f0f0f0')
-    fig.update_yaxis(showgrid=True, gridcolor='#f0f0f0', title="Price (₹)")
+   fig.update_xaxes(showgrid=True, gridcolor='#f0f0f0')
+fig.update_yaxes(showgrid=True, gridcolor='#f0f0f0'), title="Price (₹)")
 
     st.plotly_chart(fig, use_container_width=True)
 
